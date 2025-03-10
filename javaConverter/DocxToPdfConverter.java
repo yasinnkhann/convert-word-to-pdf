@@ -5,94 +5,85 @@ import java.nio.file.*;
 
 public class DocxToPdfConverter {
     
-    public static void convertDocxToPdf(String inputPath, String outputFolder) {
-        Path input = Paths.get(inputPath).toAbsolutePath();
+    public static byte[] convertDocxToPdf(ByteArrayInputStream docxStream) throws IOException {
+        // Step 1: Create temporary DOCX file
+        Path tempDocx = Files.createTempFile("input", ".docx");
+        Files.write(tempDocx, docxStream.readAllBytes());
         
-        if (!Files.isRegularFile(input)) {
-            System.out.println("❌ Error: The file '" + input + "' does not exist.");
-            return;
-        }
+        // Step 2: Create temporary PDF output file
+        Path tempPdf = Paths.get(tempDocx.toString().replace(".docx", ".pdf"));
         
-        if (outputFolder == null || outputFolder.isEmpty()) {
-            outputFolder = Paths.get("").toAbsolutePath().toString();
-        } else {
-            outputFolder = Paths.get(outputFolder).toAbsolutePath().toString();
-        }
-        
-        Path outputDir = Paths.get(outputFolder);
-        
-        if (!Files.isDirectory(outputDir)) {
-            System.out.println("❌ Error: The output folder '" + outputFolder + "' does not exist.");
-            return;
-        }
-        
+        // Step 3: Convert DOCX to PDF
         String os = System.getProperty("os.name").toLowerCase();
+        boolean success = os.contains("win") ? convertUsingWord(tempDocx.toString(), tempPdf.toString())
+                : convertUsingLibreOffice(tempDocx.toString(), tempPdf.toString());
         
-        if (os.contains("win")) {
-            // Use Microsoft Word on Windows
-            convertUsingWord(input.toString(), outputFolder);
-        } else {
-            // Use LibreOffice on macOS/Linux
-            convertUsingLibreOffice(input.toString(), outputFolder);
+        if (!success) {
+            throw new IOException("Conversion failed.");
         }
+        
+        // Step 4: Read the converted PDF into a byte array
+        byte[] pdfBytes = Files.readAllBytes(tempPdf);
+        
+        // Step 5: Cleanup
+        Files.deleteIfExists(tempDocx);
+        Files.deleteIfExists(tempPdf);
+        
+        return pdfBytes;
     }
     
-    private static void convertUsingWord(String inputPath, String outputFolder) {
-        String vbsScript = outputFolder + "\\convert.vbs";
-        String outputFilePath = outputFolder + "\\"
-                + Paths.get(inputPath).getFileName().toString().replace(".docx", ".pdf");
-        
-        String scriptContent = "Dim word\n" + "Set word = CreateObject(\"Word.Application\")\n"
-                + "word.Visible = False\n" + "Dim doc\n" + "Set doc = word.Documents.Open(\"" + inputPath + "\")\n"
-                + "doc.SaveAs \"" + outputFilePath + "\", 17\n" + "doc.Close\n" + "word.Quit";
-        
+    private static boolean convertUsingWord(String inputPath, String outputPath) {
         try {
-            Files.write(Paths.get(vbsScript), scriptContent.getBytes());
-            ProcessBuilder processBuilder = new ProcessBuilder("cscript", vbsScript);
-            processBuilder.redirectErrorStream(true);
-            Process process = processBuilder.start();
+            // Step 1: Generate temporary VBScript
+            Path scriptPath = Files.createTempFile("convert", ".vbs");
+            String vbsScript = generateVbsScript(inputPath, outputPath);
+            Files.write(scriptPath, vbsScript.getBytes());
+            
+            // Step 2: Run the VBScript
+            Process process = new ProcessBuilder("cscript", "//nologo", scriptPath.toString()).start();
             int exitCode = process.waitFor();
             
-            Files.delete(Paths.get(vbsScript));
+            // Cleanup script
+            Files.deleteIfExists(scriptPath);
             
-            if (exitCode == 0) {
-                System.out.println("✅ PDF saved in: " + outputFolder);
-            } else {
-                System.out.println("❌ Error: Conversion failed.");
-            }
+            return exitCode == 0;
         } catch (IOException | InterruptedException e) {
-            System.out.println("❌ Error: Could not convert using Microsoft Word.");
             e.printStackTrace();
+            return false;
         }
     }
     
-    private static void convertUsingLibreOffice(String inputPath, String outputFolder) {
+    private static String generateVbsScript(String inputPath, String outputPath) {
+        return "Dim word, doc\n" + "Set word = CreateObject(\"Word.Application\")\n" + "word.Visible = False\n"
+                + "Set doc = word.Documents.Open(\"" + inputPath.replace("\\", "\\\\") + "\")\n" + "doc.SaveAs2 \""
+                + outputPath.replace("\\", "\\\\") + "\", 17 'wdFormatPDF\n" + "doc.Close False\n" + "word.Quit\n"
+                + "WScript.Echo \"✅ PDF saved at: " + outputPath.replace("\\", "\\\\") + "\"\n";
+    }
+    
+    private static boolean convertUsingLibreOffice(String inputPath, String outputPath) {
+        String outputFolder = new File(outputPath).getParent();
         String[] command = { "soffice", "--headless", "--convert-to", "pdf", "--outdir", outputFolder, inputPath };
         
         try {
-            ProcessBuilder processBuilder = new ProcessBuilder(command);
-            processBuilder.redirectErrorStream(true);
-            Process process = processBuilder.start();
+            Process process = new ProcessBuilder(command).start();
             int exitCode = process.waitFor();
-            
-            if (exitCode == 0) {
-                System.out.println("✅ PDF saved in: " + outputFolder);
-            } else {
-                System.out.println("❌ Error: Conversion failed.");
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        System.out.println(line);
-                    }
-                }
-            }
+            return exitCode == 0;
         } catch (IOException | InterruptedException e) {
-            System.out.println("❌ Error: Could not convert using LibreOffice.");
             e.printStackTrace();
+            return false;
         }
     }
     
-    public static void main(String[] args) {
-        convertDocxToPdf("javaConverter/input.docx", "/Users/YasinKhan/coding/convert-docx-to-pdf/javaConverter");
+    public static void main(String[] args) throws IOException {
+        // Example: Load DOCX from a file into a ByteArrayInputStream
+        Path docxPath = Paths.get("/Users/YasinKhan/coding/convert-docx-to-pdf/javaConverter/input.docx");
+        ByteArrayInputStream docxStream = new ByteArrayInputStream(Files.readAllBytes(docxPath));
+        
+        // Convert to PDF
+        byte[] pdfBytes = convertDocxToPdf(docxStream);
+        
+        // Save PDF for testing
+        Files.write(Paths.get("/Users/YasinKhan/coding/convert-docx-to-pdf/javaConverter/input.pdf"), pdfBytes);
+        System.out.println("✅ PDF saved successfully!");
     }
 }
